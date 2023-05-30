@@ -1,0 +1,280 @@
+---
+title: "5205 Group 12 Final Project"
+author: "Group 12"
+date: "2023-04-27"
+output: html_document
+---
+
+```{r}
+setwd("~/Desktop/ColumbiaAA/Spring23/5205 APAN Frameworks & methods 2/Group project")
+
+df = read.csv("neighborhood_combined_final.csv")
+str(df)
+```
+
+```{r}
+# dealing missing values
+sum(is.na(df))
+df <- na.omit(df)
+sum(is.na(df))
+head(df)
+```
+
+```{r}
+# divide segmentation for clustering
+weather_segment = df[,2:9]
+traffic_segment = df[,10:20]
+bikes_segment = df[,21,44]
+```
+
+
+# clustering for weather_segment
+```{r}
+# Subset needs-based variables
+## check values in columns
+temp_unique <- length(unique(weather_segment$temp)) #27
+preciptype_unique <- length(unique(weather_segment$preciptype))#4
+preciptype_unique_values <- unique(weather_segment$preciptype); preciptype_unique_values #"rain" , "","rain,snow" "snow" ,need to be remove for clustering
+snow_unique <- length(unique(weather_segment$snow)) #2 dummy, need to be remove for clustering
+snowdepth_unique <- length(unique(weather_segment$snowdepth)) #2 constants need to be remove for clustering
+snowdepth_unique_values <- unique(weather_segment$snowdepth); snowdepth_unique_values #check values: 0.0, 2.9
+windspeed_unique <- length(unique(weather_segment$windspeed))#29
+cloudcover_unique <- length(unique(weather_segment$cloudcover)) #31
+visibility_unique <- length(unique(weather_segment$visibility)) #10
+conditions_unique <- length(unique(weather_segment$conditions)) #9, relies on other variable, need to be remove
+
+## check covariance
+caret::nearZeroVar(x = weather_segment,saveMetrics = T) #remove snow, snowdepth
+
+## subset weather_data based on columns values and covariance
+weather_data <- subset(df, select=c( "temp", "windspeed", "cloudcover", "visibility"))
+head(weather_data)
+
+## check covariance
+cor(weather_data) # these 4 variables are good to use
+```
+
+```{r}
+# Preprocess the weather_data
+library(dplyr)
+library(magrittr)
+
+weather_data_cluster <- weather_data %>% 
+  mutate_if(is.character, factor) %>%  # convert character columns to factors
+  mutate_if(is.factor, as.numeric) # convert factor columns to numeric
+
+## check if each column only contains numeric values
+sapply(weather_data_cluster, function(col) all(is.numeric(col)))
+
+## Check missing data
+sum(is.na(weather_data_cluster))
+
+## Scale
+weather_data_cluster = scale(weather_data_cluster)
+head(weather_data_cluster)
+```
+
+```{r}
+# K-means clustering
+## determinNumber of Clusters
+## Total within sum of squares Plot 
+library(ggplot2)
+library(ggcorrplot)
+within_ss = sapply(1:10,FUN = function(x){
+  set.seed(123)
+  kmeans(x = weather_data_cluster,centers = x,iter.max = 100,nstart = 25)$tot.withinss})
+
+ggplot(data=data.frame(cluster = 1:10,within_ss),aes(x=cluster,y=within_ss))+
+  geom_line(col='steelblue',size=1.2)+
+  geom_point()+
+  scale_x_continuous(breaks=seq(1,10,1)) #number of clusters=3，4 is the elbow point
+
+## Ratio Plot
+ratio_ss = sapply(1:10,FUN = function(x) {
+  set.seed(123)
+  km = kmeans(x = weather_data_cluster,centers = x,iter.max = 100,nstart = 25)
+  km$betweenss/km$totss} )
+ggplot(data=data.frame(cluster = 1:10,ratio_ss),aes(x=cluster,y=ratio_ss))+
+  geom_line(col='steelblue',size=1.2)+
+  geom_point()+
+  scale_x_continuous(breaks=seq(1,10,1))#number of clusters=4，5 is the elbow point
+
+# K-means clustering with 4 clusters
+set.seed(123)
+km4_weather = kmeans(x =weather_data_cluster, centers = 4, iter.max=100, nstart = 25)
+km4_weather_segments = km4_weather$cluster
+table(km4_weather_segments)
+#      1       2       3       4 
+#1002057   91138 2097158 1344019 
+```
+
+```{r}
+# Profile clusters
+data_weather = cbind(df, km4_weather_segments)
+## Profile segments by needs
+library(tidyr)
+data_weather %>%
+  select(temp, windspeed, cloudcover, visibility, km4_weather_segments)%>%
+  group_by(km4_weather_segments)%>%
+  summarize_all(function(x) round(mean(x,na.rm=T),2))%>%
+  gather(key = var,value = value,temp:visibility)%>%
+  ggplot(aes(x=var,y=value,fill=factor(km4_weather_segments)))+
+  geom_col(position='dodge')+
+  coord_flip()
+
+data_weather %>%
+  select(temp:conditions,km4_weather_segments)%>%
+  group_by(km4_weather_segments)%>%
+  summarize_all(function(x) round(mean(x,na.rm=T),2))%>%
+  data.frame()
+
+## Profile segments by demographics
+tables_list <- list()
+
+# Loop through the columns 33 to 36 
+for (i in 33:36) {
+  # Create a table with km4_weather_segments and the current column
+  tables_list[[i-32]] <- table(data_weather$km4_weather_segments, data_weather[, i])
+}
+tables_list <- lapply(data_weather[, 33:36], function(x) table(data_weather$km4_weather_segments, x))
+
+for (i in 1:length(tables_list)) {
+  cat("Table for column", 32 + i, ":\n")
+  print(tables_list[[i]])
+  cat("\n")  # Add an extra line to separate tables
+}
+
+length(data_weather$km4_weather_segments) length(data_weather[,33:36])
+
+prop.table(table(data_weather$km4_weather_segments, data_weather[,33]), 1) #typeuser
+prop.table(table(data_weather$km4_weather_segments, data_weather[,34]), 1) #birth
+prop.table(table(data_weather$km4_weather_segments, data_weather[,35]), 1) #gender
+prop.table(table(data_weather$km4_weather_segments, data_weather[,36]), 1) #age
+## round to percentage
+round(prop.table(table(data_weather$km4_weather_segments, data_weather[,33]), 1),2)*100 #typeuser
+round(prop.table(table(data_weather$km4_weather_segments, data_weather[,34]), 1),2)*100 #birth
+round(prop.table(table(data_weather$km4_weather_segments, data_weather[,35]), 1),2)*100 #gender
+round(prop.table(table(data_weather$km4_weather_segments, data_weather[,36]), 1),2)*100 #age
+```
+
+
+# clustering for traffic_segment
+```{r}
+# Subset needs-based variables
+## check values in columns
+str(traffic_segment)
+crash.time_unique <- length(unique(traffic_segment$crash.time)) #need to convert to time range, then suitable for clustering
+BOROUGH_unique <- length(unique(traffic_segment$BOROUGH)) #1:Manhattan, need to be remove
+LOCATION_unique <- length(unique(traffic_segment$LOCATION))#581 but are longitude and latitude, not suitable for clustering, need to be removed
+NUMBER.OF.PERSONS.INJURED_unique <- length(unique(traffic_segment$NUMBER.OF.PERSONS.INJURED))#5
+NUMBER.OF.PERSONS.KILLED_unique <- length(unique(traffic_segment$NUMBER.OF.PERSONS.KILLED)) #2
+NUMBER.OF.PEDESTRIANS.INJURED_unique <- length(unique(traffic_segment$NUMBER.OF.PEDESTRIANS.INJURED)) #3
+NUMBER.OF.PEDESTRIANS.KILLED_unique <- length(unique(traffic_segment$NUMBER.OF.PEDESTRIANS.KILLED)) #2
+NUMBER.OF.CYCLIST.INJURED_unique <- length(unique(traffic_segment$NUMBER.OF.CYCLIST.INJUREDD)) #0
+NUMBER.OF.CYCLIST.INJURED_unique_values <- unique(traffic_segment$NUMBER.OF.CYCLIST.INJUREDD) #null, need to be remove
+NUMBER.OF.CYCLIST.KILLED_unique <- length(unique(traffic_segment$NUMBER.OF.CYCLIST.KILLED)) #1
+NUMBER.OF.MOTORIST.INJURED_unique <- length(unique(traffic_segment$NUMBER.OF.MOTORIST.INJURE)) #5
+NUMBER.OF.MOTORIST.INJURED_unique_values <- unique(traffic_segment$NUMBER.OF.MOTORIST.INJURE) #2,0,1,3,4
+NUMBER.OF.MOTORIST.KILLED_unique <- length(unique(traffic_segment$NUMBER.OF.MOTORIST.KILLED)) #1
+
+## check covariance
+caret::nearZeroVar(x = traffic_segment,saveMetrics = T) #remove columns:"NUMBER.OF.PERSONS.KILLED","NUMBER.OF.PEDESTRIANS.KILLED"
+# check correlation 
+cor(traffic_segment[,4:11], use = 'pairwise.complete.obs') #remove columns: "NUMBER.OF.PERSONS.INJURED", "NUMBER.OF.CYCLIST.KILLED","NUMBER.OF.MOTORIST.KILLED"
+
+# extract crashtime and convert to integer
+library(dplyr)
+library(stringr)
+library(lubridate)
+traffic_segment <- traffic_segment %>%
+  mutate(crashhour = as.integer(str_extract(CRASH.TIME, "^\\d+")))
+# convert CRASH.TIME to hour of the day
+traffic_segment$crashhour <- hour(hm(traffic_segment$CRASH.TIME))
+# create a new column with time range labels
+traffic_segment$time_range <- ifelse(traffic_segment$crashhour >= 1 & traffic_segment$crashhour < 7, 1, # 1 means "midnight"
+                                  ifelse(traffic_segment$crashhour >= 7 & traffic_segment$crashhour < 13, 2, # 2 means "morning"
+                                         ifelse(traffic_segment$crashhour >= 13 & traffic_segment$crashhour < 19, 3, 4))) # 3 means "afternoon", 4 means"night"
+head(traffic_segment)
+
+## subset weather_data based on columns values and covariance
+traffic_data_cluster <- subset(traffic_segment, select=c('NUMBER.OF.PEDESTRIANS.INJURED','NUMBER.OF.MOTORIST.INJURED','time_range'))
+head(traffic_data_cluster)
+
+## check covariance
+cor(traffic_data_cluster) # these 3 variables are good to use
+```
+
+```{r}
+#Preprocess the data
+library(magrittr)
+# check if each column only contains numeric values
+sapply(traffic_data_cluster, function(col) all(is.numeric(col)))
+
+# Check missing data
+sum(is.na(traffic_data_cluster))
+
+# Scale
+traffic_data_cluster = scale(traffic_data_cluster)
+head(traffic_data_cluster)
+```
+
+```{r}
+# K-mean clustering
+## determine Number of Clusters
+# Total within sum of squares Plot 
+library(ggplot2)
+library(ggcorrplot)
+
+within_ss = sapply(1:10,FUN = function(x){
+  set.seed(123)
+  kmeans(x = traffic_data_cluster,centers = x,iter.max = 100,nstart = 25)$tot.withinss})
+
+ggplot(data=data.frame(cluster = 1:10,within_ss),aes(x=cluster,y=within_ss))+
+  geom_line(col='steelblue',size=1.2)+
+  geom_point()+
+  scale_x_continuous(breaks=seq(1,10,1)) #number of clusters=5，6，7 is the elbow point
+
+# Ratio Plot
+ratio_ss = sapply(1:10,FUN = function(x) {
+  set.seed(123)
+  km = kmeans(x = traffic_data_cluster,centers = x,iter.max = 100,nstart = 25)
+  km$betweenss/km$totss} )
+ggplot(data=data.frame(cluster = 1:10,ratio_ss),aes(x=cluster,y=ratio_ss))+
+  geom_line(col='steelblue',size=1.2)+
+  geom_point()+
+  scale_x_continuous(breaks=seq(1,10,1))#number of clusters=5，6 is the elbow point
+
+# K-means clustering with 5 clusters
+set.seed(123)
+km5_traffic = kmeans(x =traffic_data_cluster, centers = 5, iter.max=100, nstart = 25)
+km5_traffic_segments = km5_traffic$cluster
+table(km5_traffic_segments)
+ 
+head(traffic_segment)
+
+# Profile clusters
+traffic_segment = cbind(df,traffic_segment$time_range,km5_traffic_segments)
+colnames(traffic_segment)[45] <- "TimeRange"
+head(traffic_segment)      
+
+## Profile segments by needs
+library(tidyr)
+traffic_segment %>%
+select(NUMBER.OF.PEDESTRIANS.INJURED, NUMBER.OF.CYCLIST.INJURED, NUMBER.OF.MOTORIST.INJURED, TimeRange, km5_traffic_segments) %>%
+  mutate(km5_traffic_segments = as.factor(km5_traffic_segments)) %>%
+  group_by(km5_traffic_segments) %>%
+  summarize_all(function(x) round(mean(x, na.rm = T), 2)) %>%
+  ungroup() %>%
+  as.data.frame() %>%
+  gather(key = var, value = value, -km5_traffic_segments) %>%
+  ggplot(aes(x = var, y = value, fill = km5_traffic_segments)) +
+  geom_col(position = 'dodge') +
+  coord_flip()
+
+traffic_segment %>%
+  group_by(km5_traffic_segments)%>%
+  summarize_all(function(x) round(mean(x,na.rm=T),2))%>%
+  data.frame() 
+```
+
+
